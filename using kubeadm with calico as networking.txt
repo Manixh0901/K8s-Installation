@@ -1,0 +1,127 @@
+Step 1: Update Your System
+Update the package list and upgrade installed packages:
+	sudo apt update && sudo apt upgrade -y
+	sudo reboot
+
+Step 2: Install Dependencies
+Install required tools and packages:
+	sudo apt install -y apt-transport-https ca-certificates curl gnupg lsb-release
+
+Step 3: Disable Swap
+Kubernetes requires swap to be disabled:
+	sudo swapoff -a
+	sudo sed -i '/ swap / s/^/#/' /etc/fstab
+
+Step 4: Install Docker or containerd
+Kubernetes needs a container runtime. We'll use containerd (recommended).
+# Configure repository
+	curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg
+	echo "deb [arch=amd64 signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+
+# Install containerd
+	sudo apt update
+	sudo apt install -y containerd.io
+
+# Configure containerd
+	sudo mkdir -p /etc/containerd
+	containerd config default | sudo tee /etc/containerd/config.toml >/dev/null
+
+# Enable systemd cgroup driver
+	sudo sed -i 's/SystemdCgroup = false/SystemdCgroup = true/' /etc/containerd/config.toml
+
+# Restart containerd
+	sudo systemctl restart containerd
+	sudo systemctl enable containerd
+
+Step 5: Install Kubernetes Components
+Install kubeadm, kubelet, and kubectl.
+	5.1: Add the Kubernetes APT repository
+		curl -fsSL https://pkgs.k8s.io/core:/stable:/v1.29/deb/Release.key | sudo gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+		echo 'deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v1.29/deb/ /' | sudo tee /etc/apt/sources.list.d/kubernetes.list
+		sudo apt update
+
+	5.2: Install kubeadm, kubelet, and kubectl
+		sudo apt install -y kubelet kubeadm kubectl
+		sudo apt-mark hold kubelet kubeadm kubectl
+
+Step 6: Initialize Kubernetes Cluster
+	# Initialize cluster with containerd and Calico
+		sudo kubeadm init --pod-network-cidr=192.168.0.0/16 --cri-socket=unix:///var/run/containerd/containerd.sock
+	# Set up kubeconfig
+		mkdir -p $HOME/.kube
+		sudo cp -i /etc/kubernetes/admin.conf $HOME/.kube/config
+		sudo chown $(id -u):$(id -g) $HOME/.kube/config
+
+Step 7: Install Calico CNI
+	# Install Calico networking
+		kubectl create -f https://raw.githubusercontent.com/projectcalico/calico/v3.26.1/manifests/tigera-operator.yaml
+		kubectl create -f https://raw.githubusercontent.com/projectcalico/calico/v3.26.1/manifests/custom-resources.yaml
+
+	# Verify installation
+		kubectl get pods -n calico-system --watch
+	
+Step 8: Enable all the port in the master node as it is required 
+	Check firewall rules:
+
+	sudo ufw status
+	# If enabled, ensure these ports are open:
+	# 6443 (Kubernetes API server)
+	# 10250 (Kubelet API)
+	# 30000-32767 (NodePort Services)
+	# 2379-2380 (etcd server ports)
+
+	E.g: sudo ufw allow 6443/tcp 
+
+Step 8. Verify Cluster Status
+# Check node status (should show Ready after a few minutes)
+	kubectl get nodes
+# Check all system pods
+	kubectl get pods -A
+
+Complete Worker Node Setup Steps
+	Install prerequisites on worker node:
+
+	sudo apt update && sudo apt install -y apt-transport-https ca-certificates curl
+
+Install containerd (if not already installed):
+	# sudo apt install -y containerd.io
+	# sudo mkdir -p /etc/containerd
+	# containerd config default | sudo tee /etc/containerd/config.toml >/dev/null
+	# sudo systemctl restart containerd
+	
+Install kubeadm, kubelet and kubectl:
+
+	# sudo apt install -y kubeadm kubelet kubectl
+	# sudo apt-mark hold kubeadm kubelet kubectl
+	
+Join the cluster (as root/sudo):
+	<<sudo kubeadm join 192.168.220.136:6443 --token 2rn3fq.yzqybh6ec3bsknvl \
+        --discovery-token-ca-cert-hash sha256:6e1ae72a7f5a4a58cd57eb6229b5403d9e6ae1556712cca8b896d6a14fbd147a>>
+	>>> This is the token which is generated while running step 6 or we can have by giving the command as kubeadm token create --print-join-command on master node 
+	Verification
+On the master node, check the worker node status:
+	# kubectl get nodes
+
+Troubleshooting methods if any issue occurs:
+	Verify network connectivity between nodes:
+
+	# ping <master-node-ip>
+	# curl -vk https://<master-node-ip>:6443
+
+Proper Certificate Fix (Recommended) if Certificate Validation Error with Calico Installation
+	Verify your kubeconfig is correct
+	# kubectl create -f https://raw.githubusercontent.com/projectcalico/calico/v3.26.1/manifests/tigera-operator.yaml
+	# kubectl create -f https://raw.githubusercontent.com/projectcalico/calico/v3.26.1/manifests/custom-resources.yaml
+	# kubectl config view
+
+Regenerate certificates (if needed):
+
+	# sudo kubeadm init phase certs all
+	# sudo systemctl restart kubelet
+
+Update your kubeconfig:
+	# sudo cp /etc/kubernetes/admin.conf $HOME/.kube/config
+	# sudo chown $(id -u):$(id -g) $HOME/.kube/config
+Try installing Calico again:
+	# kubectl create -f https://raw.githubusercontent.com/projectcalico/calico/v3.26.1/manifests/tigera-operator.yaml
+	# kubectl create -f https://raw.githubusercontent.com/projectcalico/calico/v3.26.1/manifests/custom-resources.yaml
